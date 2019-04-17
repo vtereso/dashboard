@@ -45,44 +45,6 @@ func TestMain(m *testing.M) {
 		}
 	}
 	server = httptest.NewServer(wsContainer)
-
-	pipeline1 := v1alpha1.Pipeline{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "Pipeline1",
-		},
-		Spec: v1alpha1.PipelineSpec{},
-	}
-	_, err := resource.PipelineClient.TektonV1alpha1().Pipelines(namespace).Create(&pipeline1)
-	if err != nil {
-		fmt.Printf("testpipeline error: %s\n", err)
-	}
-
-	pipelinerun := v1alpha1.PipelineRun{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "fakepipeline",
-			Namespace: namespace,
-			Labels: map[string]string{
-				"app":          "tekton-app",
-				gitServerLabel: "github.com",
-				gitOrgLabel:    "foo",
-				gitRepoLabel:   "bar",
-			},
-		},
-
-		Spec: v1alpha1.PipelineRunSpec{
-			PipelineRef:    v1alpha1.PipelineRef{Name: "fakepipeline"},
-			Trigger:        v1alpha1.PipelineTrigger{Type: v1alpha1.PipelineTriggerTypeManual},
-			ServiceAccount: "default",
-			Timeout:        &metav1.Duration{Duration: 1 * time.Hour},
-			Resources:      nil,
-			Params:         nil,
-			Status:         "",
-		},
-	}
-	_, err = resource.PipelineClient.TektonV1alpha1().PipelineRuns(namespace).Create(&pipelinerun)
-	if err != nil {
-		fmt.Printf("Error creating the fake pipelinerun to use for tests: %s\n", err)
-	}
 	os.Exit(m.Run())
 }
 
@@ -224,6 +186,43 @@ func fakeCRD(t *testing.T, crdType string, identifier string,) interface{} {
 			Type:        "accesstoken",
 			URL: map[string]string{
 				"tekton.dev/git-0": "https://github.com",
+			},
+		}
+	case "pipelinerun":
+		pipeline := v1alpha1.Pipeline{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: identifier,
+			},
+		}
+		_, err := resource.PipelineClient.TektonV1alpha1().Pipelines(namespace).Create(&pipeline)
+		if err != nil {
+			t.Error("Creating pipeline for pipelinerun error:", err)
+		}
+		return &v1alpha1.PipelineRun{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      identifier,
+				Namespace: namespace,
+				Labels: map[string]string{
+					"app":          "tekton-app",
+					gitServerLabel: "github.com",
+					gitOrgLabel:    "foo",
+					gitRepoLabel:   "bar",
+				},
+			},
+			Spec: v1alpha1.PipelineRunSpec{
+				PipelineRef:    v1alpha1.PipelineRef{Name: identifier},
+				Trigger:        v1alpha1.PipelineTrigger{Type: v1alpha1.PipelineTriggerTypeManual},
+				ServiceAccount: "default",
+				Timeout:        &metav1.Duration{Duration: 1 * time.Hour},
+				Resources:      nil,
+				Params:         nil,
+				Status:         "",
+			},
+		}
+	case "pipeline":
+		return &v1alpha1.Pipeline{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: identifier,
 			},
 		}
 	default:
