@@ -151,27 +151,6 @@ func getResourceType(route string, httpMethod string) string {
 
 
 func fakeCRD(t *testing.T, crdType string, identifier string,) interface{} {
-	defer func() {
-		pipelines, err := resource.PipelineClient.TektonV1alpha1().Pipelines(namespace).List(metav1.ListOptions{})
-		if err != nil {
-			t.Error("Error getting pipelines:",err)
-		} else {
-			t.Log("Pipelines returned:",len(pipelines.Items))
-			for _,p := range pipelines.Items {
-				t.Log("Pipeline:",p)
-			}
-		}
-
-		pipelineRuns, err := resource.PipelineClient.TektonV1alpha1().PipelineRuns(namespace).List(metav1.ListOptions{})
-		if err != nil {
-			t.Error("Error getting pipelineRuns:",err)
-		} else {
-			t.Log("PipelineRuns returned:",len(pipelineRuns.Items))
-			for _,p := range pipelineRuns.Items {
-				t.Log("PipelineRun:",p)
-			}
-		}
-	}()
 	// Use this as the CRD identifier 
 	if identifier == "" {
 		identifier = uuid.NewV4().String()
