@@ -2,7 +2,9 @@ package endpoints
 
 import (
 	"os"
+	"fmt"
 	"bytes"
+	"time"
 	"strings"
 	"testing"
 	"encoding/json"
@@ -14,11 +16,13 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1alpha1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 )
 
 
 var server *httptest.Server
 var methodMap = make(map[string][]string) // k, v := HTTP_METHOD, []route
+var resource *Resource
 
 // Set up
 const namespace string = "fake"
@@ -26,7 +30,7 @@ const namespace string = "fake"
 func TestMain(m *testing.M) {
 	wsContainer := restful.NewContainer()
 
-	resource := dummyResource()
+	resource = dummyResource()
 	resource.K8sClient.CoreV1().Namespaces().Create(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}})
 
 	resource.RegisterEndpoints(wsContainer)
@@ -41,6 +45,44 @@ func TestMain(m *testing.M) {
 		}
 	}
 	server = httptest.NewServer(wsContainer)
+
+	pipeline1 := v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "Pipeline1",
+		},
+		Spec: v1alpha1.PipelineSpec{},
+	}
+	_, err := resource.PipelineClient.TektonV1alpha1().Pipelines(namespace).Create(&pipeline1)
+	if err != nil {
+		fmt.Printf("testpipeline error: %s\n", err)
+	}
+
+	pipelinerun := v1alpha1.PipelineRun{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "fakepipeline",
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app":          "tekton-app",
+				gitServerLabel: "github.com",
+				gitOrgLabel:    "foo",
+				gitRepoLabel:   "bar",
+			},
+		},
+
+		Spec: v1alpha1.PipelineRunSpec{
+			PipelineRef:    v1alpha1.PipelineRef{Name: "fakepipeline"},
+			Trigger:        v1alpha1.PipelineTrigger{Type: v1alpha1.PipelineTriggerTypeManual},
+			ServiceAccount: "default",
+			Timeout:        &metav1.Duration{Duration: 1 * time.Hour},
+			Resources:      nil,
+			Params:         nil,
+			Status:         "",
+		},
+	}
+	_, err = resource.PipelineClient.TektonV1alpha1().PipelineRuns(namespace).Create(&pipelinerun)
+	if err != nil {
+		fmt.Printf("Error creating the fake pipelinerun to use for tests: %s\n", err)
+	}
 	os.Exit(m.Run())
 }
 
@@ -147,6 +189,27 @@ func getResourceType(route string, httpMethod string) string {
 
 
 func fakeCRD(t *testing.T, crdType string, identifier string,) interface{} {
+	defer func() {
+		pipelines, err := resource.PipelineClient.TektonV1alpha1().Pipelines(namespace).List(metav1.ListOptions{})
+		if err != nil {
+			t.Error("Error getting pipelines:",err)
+		} else {
+			t.Log("Pipelines returned:",len(pipelines.Items))
+			for _,p := range pipelines.Items {
+				t.Log("Pipeline:",p)
+			}
+		}
+
+		pipelineRuns, err := resource.PipelineClient.TektonV1alpha1().PipelineRuns(namespace).List(metav1.ListOptions{})
+		if err != nil {
+			t.Error("Error getting pipelineRuns:",err)
+		} else {
+			t.Log("PipelineRuns returned:",len(pipelineRuns.Items))
+			for _,p := range pipelineRuns.Items {
+				t.Log("PipelineRun:",p)
+			}
+		}
+	}()
 	// Use this as the CRD identifier 
 	if identifier == "" {
 		identifier = uuid.NewV4().String()
