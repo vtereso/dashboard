@@ -1,7 +1,7 @@
 const merge = require('webpack-merge');
 
 const common = require('./webpack.common.js');
-const { API_DOMAIN, PORT } = require('./config/config.json');
+const { API_DOMAIN, PORT } = require('./config_frontend/config.json');
 
 module.exports = merge(common, {
   mode: 'development',
@@ -12,9 +12,8 @@ module.exports = merge(common, {
     overlay: true,
     port: process.env.PORT || PORT,
     proxy: {
-      '/api': {
-        target: process.env.API_DOMAIN || API_DOMAIN,
-        pathRewrite: { '^/api': '' }
+      '/v1': {
+        target: process.env.API_DOMAIN || API_DOMAIN
       }
     },
     stats: 'minimal'

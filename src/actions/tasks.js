@@ -11,4 +11,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-export { default } from './PipelineRunHeader';
+import { getTasks } from '../api';
+
+export function fetchTasksSuccess(data) {
+  return {
+    type: 'TASKS_FETCH_SUCCESS',
+    data
+  };
+}
+
+export function fetchTasks() {
+  return async dispatch => {
+    dispatch({ type: 'TASKS_FETCH_REQUEST' });
+    let tasks;
+    try {
+      tasks = await getTasks();
+      dispatch(fetchTasksSuccess(tasks));
+    } catch (error) {
+      dispatch({ type: 'TASKS_FETCH_FAILURE', error });
+    }
+    return tasks;
+  };
+}

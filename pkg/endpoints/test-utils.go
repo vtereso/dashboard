@@ -10,6 +10,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package endpoints
 
 import (
@@ -17,6 +18,7 @@ import (
 	"net/http"
 
 	restful "github.com/emicklei/go-restful"
+
 	fakeclientset "github.com/tektoncd/pipeline/pkg/client/clientset/versioned/fake"
 	fakek8sclientset "k8s.io/client-go/kubernetes/fake"
 )
@@ -31,7 +33,7 @@ func dummyClientset() *fakeclientset.Clientset {
 	return result
 }
 
-func dummyHttpRequest(method string, url string, body io.Reader) *http.Request {
+func dummyHTTPRequest(method string, url string, body io.Reader) *http.Request {
 	httpReq, _ := http.NewRequest(method, url, body)
 	httpReq.Header.Set("Content-Type", "application/json")
 	return httpReq

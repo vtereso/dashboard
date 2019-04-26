@@ -8,10 +8,42 @@ Tekton Dashboard is a general purpose, web-based UI for Tekton Pipelines. It all
 
 ## Getting Started
 
-[coming soon] To deploy the dashboard, execute the following command:
+**Currently** to view the dashboard, at `localhost:9097/` 
+ 
+If you have `ko`:
 
+Log in to Dockerhub and then use `ko`, for example:
+
+```sh
+$ docker login
+$ export KO_DOCKER_REPO=docker.io/<mydockername>
+$ npm install
+$ npm run build_ko
+$ ko apply -f config
 ```
-sh
+
+This will build and push an image of the Tekton dashboard to a Dockerhub repository under your account.
+
+Alternatively you can do the following:
+
+```sh
+$ docker build -t <mydockername>/dashboard:<mytag> .
+- Replace the image path at `config/tekton-dashboard-deployment.yaml` with the value for <mydockername>/dashboard:<mytag>
+$ kubectl apply -f tekton-dashboard-deployment.yaml
+```
+
+Regardless of which installation mechanism you choose, do the following to access the dashboard: 
+
+```sh
+$ kubectl port-forward $(kubectl get pod -l app=tekton-dashboard -o name) 9097:9097
+```
+
+- Visit [localhost:9097](http://localhost:9097) in your web browser.
+
+**Coming soon**
+- Deploying the dashboard without using the `config/` yaml, and accessing using kubectl proxy. To deploy the dashboard, execute the following command:
+
+```sh
 $ kubectl apply -f https://raw.githubusercontent.com/tektoncd/dashboard/...
 ```
 
@@ -20,40 +52,14 @@ To access the Tekton Dashboard from your local workstation you must create a sec
 ```sh
 $ kubectl proxy
 ```
-Now access Dashboard at:
+Now access the Dashboard at:
 
 [`http://localhost:8001/api/v1/namespaces/tekton-pipelines/services/https:tekton-dashboard:/proxy/`](
 http://localhost:8001/api/v1/namespaces/tekton-pipelines/https:tekton-dashboard:/proxy/).
-
 
 ## Want to contribute
 
 We are so excited to have you!
 
 - See [CONTRIBUTING.md](https://github.com/tektoncd/pipeline/blob/master/CONTRIBUTING.md) for an overview of our processes
-- See [DEVELOPMENT.md](https://github.com/tektoncd/pipeline/blob/master/DEVELOPMENT.md) for how to get started
-
-
-## Development Notes
-
-Current back-end deployment notes:-
-
-```
-$ docker build -t YOUR_DOCKERHUB_ID/back-end .
-$ docker push YOUR_DOCKERHUB_ID/back-end
-```
-
-Edit install/tekton-dashboard-deployment.yaml and replace `CHANGE_ME` with YOUR_DOCKERHUB_ID, and save the file
-
-```
-$ kubectl apply -f ./install/tekton-dashboard-deployment.yaml
-```
-
-You can now port-forward to directly access the backend code.  If running in local kube environment you should be able to simply
-
-```
-$ kubectl get pods
-$ kubectl port-forward <dashboard_pod_name> 9097:9097
-```
-
-You should now be able to hit the REST endpoints in the backend code at localhost:9097
+- See [DEVELOPMENT.md](https://github.com/tektoncd/dashboard/blob/master/DEVELOPMENT.md) for how to get started

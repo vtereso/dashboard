@@ -12,7 +12,8 @@ limitations under the License.
 */
 
 import React, { Component } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, NavLink } from 'react-router-dom';
+import { connect } from 'react-redux';
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -26,43 +27,38 @@ import {
 } from 'carbon-components-react';
 
 import Header from '../../components/Header';
-import { getPipelines } from '../../api';
+import { fetchPipelines } from '../../actions/pipeline';
+import {
+  getPipelines,
+  getPipelinesErrorMessage,
+  isFetchingPipelines
+} from '../../reducers';
 
-import '../../components/Pipelines/Pipelines.scss';
+import '../../components/Definitions/Definitions.scss';
 
-/* istanbul ignore next */
-class Pipelines extends Component {
-  state = {
-    error: null,
-    loading: true,
-    pipelines: []
-  };
-
-  async componentDidMount() {
-    try {
-      const pipelines = await getPipelines();
-      this.setState({ pipelines, loading: false });
-    } catch (error) {
-      this.setState({ error, loading: false });
-    }
+export /* istanbul ignore next */ class Pipelines extends Component {
+  componentDidMount() {
+    this.props.fetchPipelines();
   }
 
   render() {
-    const { error, loading, pipelines } = this.state;
+    const { error, loading, pipelines } = this.props;
 
     return (
-      <div className="pipelines">
+      <div className="definitions">
         <Header>
-          <div className="pipelines-header">
+          <div className="definitions-header">
             <Breadcrumb>
-              <BreadcrumbItem href="#">Pipelines</BreadcrumbItem>
+              <BreadcrumbItem>
+                <NavLink to="/pipelines">Pipelines</NavLink>
+              </BreadcrumbItem>
             </Breadcrumb>
           </div>
         </Header>
 
         <main>
           {(() => {
-            if (loading) {
+            if (loading && !pipelines.length) {
               return <StructuredListSkeleton border />;
             }
 
@@ -71,7 +67,7 @@ class Pipelines extends Component {
                 <InlineNotification
                   kind="error"
                   title="Error loading pipelines"
-                  subtitle={JSON.stringify(error)}
+                  subtitle={error}
                 />
               );
             }
@@ -88,7 +84,7 @@ class Pipelines extends Component {
                     const pipelineName = pipeline.metadata.name;
                     return (
                       <StructuredListRow
-                        className="pipeline"
+                        className="definition"
                         key={pipeline.metadata.uid}
                       >
                         <StructuredListCell>
@@ -109,4 +105,24 @@ class Pipelines extends Component {
   }
 }
 
-export default Pipelines;
+Pipelines.defaultProps = {
+  pipelines: []
+};
+
+/* istanbul ignore next */
+function mapStateToProps(state) {
+  return {
+    error: getPipelinesErrorMessage(state),
+    loading: isFetchingPipelines(state),
+    pipelines: getPipelines(state)
+  };
+}
+
+const mapDispatchToProps = {
+  fetchPipelines
+};
+
+export default connect(
+  mapStateToProps,
+  mapDispatchToProps
+)(Pipelines);

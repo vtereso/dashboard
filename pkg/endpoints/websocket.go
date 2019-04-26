@@ -10,12 +10,13 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package endpoints
 
 import (
 	restful "github.com/emicklei/go-restful"
-	logging "github.com/tektoncd/dashboard/pkg/logging"
 	broadcaster "github.com/tektoncd/dashboard/pkg/broadcaster"
+	logging "github.com/tektoncd/dashboard/pkg/logging"
 	"github.com/tektoncd/dashboard/pkg/websocket"
 )
 
@@ -31,7 +32,7 @@ var pipelineRunsBroadcaster = broadcaster.NewBroadcaster(pipelineRunsChannel)
 func (r Resource) establishPipelineLogsWebsocket(request *restful.Request, response *restful.Response) {
 	connection, err := websocket.UpgradeToWebsocket(request, response)
 	if err != nil {
-		logging.Log.Errorf("Could not upgrade to websocket connection: %s", err)
+		logging.Log.Errorf("could not upgrade to websocket connection: %s", err)
 	}
 	websocket.WriteOnlyWebsocket(connection, logBroadcaster)
 }
@@ -40,8 +41,7 @@ func (r Resource) establishPipelineLogsWebsocket(request *restful.Request, respo
 func (r Resource) establishPipelineRunsWebsocket(request *restful.Request, response *restful.Response) {
 	connection, err := websocket.UpgradeToWebsocket(request, response)
 	if err != nil {
-		logging.Log.Errorf("Could not upgrade to websocket connection: %s", err)
+		logging.Log.Errorf("could not upgrade to websocket connection: %s", err)
 	}
-
 	websocket.WriteOnlyWebsocket(connection, pipelineRunsBroadcaster)
 }

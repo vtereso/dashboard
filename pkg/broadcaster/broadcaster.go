@@ -10,11 +10,12 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package broadcaster
 
 import (
-	"errors"
 	"sync"
+	"errors"
 )
 
 type messageType string
@@ -35,16 +36,19 @@ type SocketData struct {
 // Only a pointer to the struct should be used
 type Broadcaster struct {
 	expired     bool
-	subscribers *sync.Map //map[&Subscriber]struct{}
-	//c chan interface{}
+	// Explicit name to specify locking condition
+	expiredLock sync.Mutex
+	subscribers *sync.Map //map[*Subscriber]struct{}
 	c chan SocketData
 }
 
+// Wrapper return type for subscriptions
 type Subscriber struct {
 	subChan   chan SocketData
 	unsubChan chan struct{}
 }
 
+// Read-Only access to the subscription channel
 // Open or nil, never closed
 func (s *Subscriber) SubChan() <-chan SocketData {
 	return s.subChan
@@ -55,13 +59,10 @@ func (s *Subscriber) UnsubChan() <-chan struct{} {
 	return s.unsubChan
 }
 
-type expiredError struct{}
-
-func (e expiredError) Error() string {
-	return "Broadcaster expired"
-}
+var expiredError error = errors.New("Broadcaster expired")
 
 // Creates broadcaster from channel parameter and immediately starts broadcasting
+// Without any subscribers, received data will be discarded
 // Broadcaster should be the only channel reader
 func NewBroadcaster(c chan SocketData) *Broadcaster {
 	if c == nil {
@@ -72,7 +73,7 @@ func NewBroadcaster(c chan SocketData) *Broadcaster {
 	b.c = c
 	go func() {
 		for {
-			msg, channelOpen := <-b.c
+			msg, channelOpen := <- b.c
 			if channelOpen {
 				b.subscribers.Range(func(key, value interface{}) bool {
 					subscriber := key.(*Subscriber)
@@ -83,25 +84,36 @@ func NewBroadcaster(c chan SocketData) *Broadcaster {
 					return true
 				})
 			} else {
+				b.expiredLock.Lock()
 				b.expired = true
 				b.subscribers.Range(func(key, value interface{}) bool {
 					subscriber := key.(*Subscriber)
-					subscriber.subChan = nil
+					close(subscriber.unsubChan)
 					return true
 				})
 				// Remove references
 				b.subscribers = nil
+				b.expiredLock.Unlock()
+				return
 			}
 		}
 	}()
 	return b
 }
 
+func (b *Broadcaster) Expired() bool {
+	defer b.expiredLock.Unlock()
+	b.expiredLock.Lock()
+	return b.expired
+}
+
 // Subscriber expected to constantly consume or unsubscribe
 func (b *Broadcaster) Subscribe() (*Subscriber, error) {
+	defer b.expiredLock.Unlock()
+	b.expiredLock.Lock()
 
 	if b.expired {
-		return &Subscriber{}, expiredError{}
+		return &Subscriber{}, expiredError
 	}
 	newSub := &Subscriber{
 		subChan:   make(chan SocketData),
@@ -112,21 +124,28 @@ func (b *Broadcaster) Subscribe() (*Subscriber, error) {
 	return newSub, nil
 }
 
-// Should not be called from parallel goroutines, may panic
+
 func (b *Broadcaster) Unsubscribe(sub *Subscriber) error {
+	defer b.expiredLock.Unlock()
+	b.expiredLock.Lock()
+	
 	if b.expired {
-		return expiredError{}
+		return expiredError
 	}
 	if _, ok := b.subscribers.Load(sub); ok {
 		b.subscribers.Delete(sub)
-		sub.subChan = nil
 		close(sub.unsubChan)
 		return nil
 	}
 	return errors.New("Subscription not found")
 }
 
+// Iterates over sync.Map and returns number of elements
+// Response can be oversized if counted subscriptions are cancelled while counting
 func (b *Broadcaster) PoolSize() (size int) {
+	defer b.expiredLock.Unlock()
+	b.expiredLock.Lock()
+
 	if b.expired {
 		return 0
 	}
@@ -134,5 +153,5 @@ func (b *Broadcaster) PoolSize() (size int) {
 		size++
 		return true
 	})
-	return
+	return size
 }

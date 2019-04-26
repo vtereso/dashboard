@@ -10,6 +10,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package main
 
 import (
@@ -36,14 +37,14 @@ func main() {
 		cfg, err = rest.InClusterConfig()
 	}
 	if err != nil {
-		logging.Log.Errorf("Error building kubeconfig from %s: %s", kubeconfig, err.Error())
+		logging.Log.Errorf("error building kubeconfig from %s: %s", kubeconfig, err.Error())
 	}
 
 	port := ":8080"
-	portnumber := os.Getenv("PORT")
-	if portnumber != "" {
-		port = ":" + portnumber
-		logging.Log.Infof("Port number from config: %s", portnumber)
+	portNumber := os.Getenv("PORT")
+	if portNumber != "" {
+		port = ":" + portNumber
+		logging.Log.Infof("Port number from config: %s", portNumber)
 	}
 
 	wsContainer := restful.NewContainer()
@@ -51,14 +52,14 @@ func main() {
 
 	pipelineClient, err := clientset.NewForConfig(cfg)
 	if err != nil {
-		logging.Log.Errorf("Error building pipeline clientset: %s", err.Error())
+		logging.Log.Errorf("error building pipeline clientset: %s", err.Error())
 	} else {
 		logging.Log.Info("Got a pipeline client")
 	}
 
 	k8sClient, err := k8sclientset.NewForConfig(cfg)
 	if err != nil {
-		logging.Log.Errorf("Error building k8s clientset: %s", err.Error())
+		logging.Log.Errorf("error building k8s clientset: %s", err.Error())
 	} else {
 		logging.Log.Info("Got a k8s client")
 	}
@@ -69,10 +70,15 @@ func main() {
 	}
 
 	logging.Log.Info("Registering REST endpoints")
+	resource.RegisterWeb(wsContainer)
 	resource.RegisterEndpoints(wsContainer)
 	resource.RegisterWebsocket(wsContainer)
 	resource.RegisterHealthProbes(wsContainer)
 	resource.RegisterReadinessProbes(wsContainer)
+
+	installedNamespace := os.Getenv("INSTALLED_NAMESPACE")
+	logging.Log.Infof("Searching for extensions in the namespace %s", installedNamespace)
+	resource.RegisterExtensions(wsContainer, installedNamespace)
 
 	stopCh := signals.SetupSignalHandler()
 	resource.StartPipelineRunController(stopCh)

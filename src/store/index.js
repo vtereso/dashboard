@@ -11,26 +11,24 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-.pipeline-run {
-  main {
-    padding: 2em 5%;
-  }
+import { applyMiddleware, compose, createStore } from 'redux';
+import thunk from 'redux-thunk';
 
-  .tasks {
-    display: flex;
-    flex-wrap: nowrap;
-    border: 1px solid #dfe3e6;
-    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.07);
-    min-height: calc(100vh - 16rem);
-    align-items: stretch;
-    background-color: white;
-  }
+import rootReducer from '../reducers';
 
-  .task-tree {
-    flex-shrink: 0;
-  }
+/* eslint-disable no-underscore-dangle */
+const composeEnhancers = window.__REDUX_DEVTOOLS_EXTENSION_COMPOSE__ || compose;
+/* eslint-enable */
 
-  .step-details {
-    flex-grow: 1;
-  }
+export function configureStore(initialState = {}) {
+  const middleware = [thunk];
+
+  return createStore(
+    rootReducer,
+    initialState,
+    composeEnhancers(applyMiddleware(...middleware))
+  );
 }
+
+const store = configureStore();
+export default store;
