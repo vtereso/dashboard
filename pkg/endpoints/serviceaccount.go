@@ -2,6 +2,9 @@ package endpoints
 
 import (
 	"fmt"
+	"net/http"
+	"encoding/json"
+
 	restful "github.com/emicklei/go-restful"
 
 	logging "github.com/tektoncd/dashboard/pkg/logging"
@@ -12,65 +15,81 @@ import (
 	types "k8s.io/apimachinery/pkg/types"
 )
 
+type patchStringValue struct {
+	Op    string `json:"op"`
+	Path  string `json:"path"`
+	Value string `json:"value"`
+}
+
+// Only handles "op": "add"
 func (r Resource) patchServiceAccount(request *restful.Request, response *restful.Response) {
+	logging.Log.Debug("Inside patchServiceAccount")
 	// Path parameters for specific SA
 	namespace := request.PathParameter("namespace")
 	name := request.PathParameter("name")
 	
 	// Secret being patched
 	patchSecret := &v1.Secret{}
-	if err := request.ReadEntity(&patchSecret) {
+	if err := request.ReadEntity(&patchSecret); err != nil {
 		logging.Log.Error("Error parsing request body on call to patchServiceAccount %s", err)
 		utils.RespondError(response, err, http.StatusBadRequest)
 		return
 	}
 
 	// Service Account being patched
-	serviceAccount, err := r.K8sClient.CoreV1().ServiceAccounts(namespace).Get(name)
+	serviceAccount, err := r.K8sClient.CoreV1().ServiceAccounts(namespace).Get(name,metav1.GetOptions{})
 	if err != nil {
-		errorMessage := fmt.Sprintf("Error obtaining SA %s in %s namespace. K8sClient error: %s",name, namespace, err.Error())
+		errorMessage := fmt.Sprintf("Error obtaining SA %s in %s namespace",name, namespace)
 		utils.RespondMessageAndLogError(response, err, errorMessage, http.StatusBadRequest)
 		return
 	}
 
 	var patchPath string
-	// Add as the last element
-	getPathPostfix := func(array []interface{}) string {
-		if len(arr) != 0 {
-			return fmt.Sprintf("/%d",/len(arr))
-		}
-	}
 	switch patchSecret.Type {
 	// ImagePullSecret
 	case v1.SecretTypeDockerConfigJson:
 		// Ensure ImagePullSecret does not already exist
-		for _, imagePullSecret := range serviceAccount.ImagePullSecret {
+		for _, imagePullSecret := range serviceAccount.ImagePullSecrets {
 			if imagePullSecret.Name == patchSecret.Name {
-				err := fmt.Errorf("%s ImagePullSecret already exists on SA %d",patchSecret.Name,serviceAccount.Name)
-				utils.RespondMessageAndLogError(response, err, errorMessage, http.StatusBadRequest)
+				err := fmt.Errorf("%s ImagePullSecret already exists on SA %s\n",patchSecret.Name,serviceAccount.Name)
+				utils.RespondError(response, err, http.StatusBadRequest)
 			}
 		}
-		patchPatch = "/imagePullSecrets" + getPathPostfix(serviceAccount.ImagePullSecret)
+		patchPath = "/spec/imagePullSecrets"
+		if len(serviceAccount.ImagePullSecrets) != 0 {
+			patchPath += fmt.Sprintf("/%d",len(serviceAccount.ImagePullSecrets))
+		}
 	case v1.SecretTypeBasicAuth:
 		// Ensure Secret does not already exist
 		for _, imagePullSecret := range serviceAccount.Secrets {
 			if imagePullSecret.Name == patchSecret.Name {
-				err := fmt.Errorf("%s Secret already exists on SA %d",patchSecret.Name,serviceAccount.Name)
-				utils.RespondMessageAndLogError(response, err, errorMessage, http.StatusBadRequest)
+				err := fmt.Errorf("%s Secret already exists on SA %s\n",patchSecret.Name,serviceAccount.Name)
+				utils.RespondError(response, err, http.StatusBadRequest)
 			}
 		}
-		patchPatch = "/secrets" + getPathPostfix(serviceAccount.Secrets)
+		patchPath = "/spec/secrets"
+		if len(serviceAccount.Secrets) != 0 {
+			patchPath += fmt.Sprintf("/%d",len(serviceAccount.ImagePullSecrets))
+		}
 	default:
-		utils.RespondMessageAndLogError(response, fmt.Errorf("Secret with type %s not supported for patching",patchPatch.Type), http.StatusBadRequest)
+		utils.RespondError(response, fmt.Errorf("Secret with type %s not supported for patching\n",patchSecret.Type), http.StatusBadRequest)
 		return
 	}
 
-
-	patchBuf := []byte("[{ \"op\": \"add\", \"path\": "+patchPatch+", \"value\": { \"name\": "+patchSecret.Name+"} }]")
+	//patchBuf := []byte(`[{ "op": "add", "path": `+patchPath+`, "value": { "name": `+patchSecret.Name+`} }]`)
+	patchRequest := patchStringValue {
+		Op: "add",
+		Path: patchPath,
+		Value: fmt.Sprintf("{ \"name\": %s }",patchSecret.Name),
+	}
+	patchBuf, _ := json.Marshal(&patchRequest)
 	// Patch SA
 	if _, err := r.K8sClient.CoreV1().ServiceAccounts(namespace).Patch(name,types.JSONPatchType,patchBuf); err != nil {
-		utils.RespondMessageAndLogError(response, err, errorMessage, http.StatusBadRequest)
+		logging.Log.Debugf("Failed to patch request: %s\n",string(patchBuf))
+		utils.RespondError(response, err, http.StatusBadRequest)
 		return
 	}
+
+
 	response.WriteHeader(204)
 }

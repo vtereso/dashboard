@@ -83,6 +83,8 @@ func (r Resource) RegisterEndpoints(container *restful.Container) {
 	wsv1.Route(wsv1.PUT("/{namespace}/credential/{name}").To(r.updateCredential))
 	wsv1.Route(wsv1.DELETE("/{namespace}/credential/{name}").To(r.deleteCredential))
 
+	wsv1.Route(wsv1.PATCH("/{namespace}/serviceaccount/{name}").To(r.patchServiceAccount))
+
 	container.Add(wsv1)
 }
 
