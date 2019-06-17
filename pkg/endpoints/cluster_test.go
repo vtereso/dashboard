@@ -11,66 +11,79 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package endpoints
+package endpoints_test
 
 import (
 	"encoding/json"
-	"net/http/httptest"
+	"fmt"
+	"net/http"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func TestGetAllNamespaces(t *testing.T) {
+// GET namespaces
+func TestGETAllNamespaces(t *testing.T) {
+	server, r := dummyServer()
+	defer server.Close()
 
-	r := dummyResource()
-
-	namespace := "test-namespace"
-	r.K8sClient.CoreV1().Namespaces().Create(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}})
-
-	httpReq := dummyHTTPRequest("GET", "http://wwww.dummy.com:8383/v1/namespaces/", nil)
-	req := dummyRestfulRequest(httpReq, "", "")
-	httpWriter := httptest.NewRecorder()
-	resp := dummyRestfulResponse(httpWriter)
-
-	r.getAllNamespaces(req, resp)
-
-	result := corev1.NamespaceList{}
-	json.NewDecoder(httpWriter.Body).Decode(&result)
-
-	if len(result.Items) != 1 {
-		t.Errorf("Number of namespaces: expected: %d, returned: %d", 1, len(result.Items))
+	namespaces := []string{
+		"ns1",
 	}
-	if result.Items[0].Name != namespace {
-		t.Errorf("%s is not returned: %s, %s", namespace, result.Items[0].Name, result.Items[1].Name)
+	for _, namespace := range namespaces {
+		_, err := r.K8sClient.CoreV1().Namespaces().Create(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}})
+		if err != nil {
+			t.Fatalf("Error creating namespace '%s': %v\n", namespace, err)
+		}
+	}
+
+	httpReq := dummyHTTPRequest("GET", fmt.Sprintf("%s/v1/namespaces", server.URL), nil)
+	response, _ := http.DefaultClient.Do(httpReq)
+	responseNamespaceList := corev1.NamespaceList{}
+	if err := json.NewDecoder(response.Body).Decode(&responseNamespaceList); err != nil {
+		t.Fatalf("Error decoding getAllNamespaces response: %v\n", err)
+	} else {
+		if len(responseNamespaceList.Items) != len(namespaces) {
+			t.Errorf("All expected namespaces were not returned: expected %v, actual %v", len(namespaces), len(responseNamespaceList.Items))
+		}
 	}
 }
 
-func TestGetAllServiceAccounts(t *testing.T) {
+// GET serviceaccounts
+func TestGETAllServiceAccounts(t *testing.T) {
+	server, r := dummyServer()
+	defer server.Close()
 
-	r := dummyResource()
-
-	namespace := "test-namespace"
-	r.K8sClient.CoreV1().Namespaces().Create(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}})
-
-	serviceAccount := "test-sa"
-	r.K8sClient.CoreV1().ServiceAccounts(namespace).Create(&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: serviceAccount}})
-
-	httpReq := dummyHTTPRequest("GET", "http://wwww.dummy.com:8383/v1/namespaces/test-namespace/serviceaccount", nil)
-	req := dummyRestfulRequest(httpReq, "", "")
-	httpWriter := httptest.NewRecorder()
-	resp := dummyRestfulResponse(httpWriter)
-
-	r.getAllServiceAccounts(req, resp)
-
-	result := corev1.ServiceAccountList{}
-	json.NewDecoder(httpWriter.Body).Decode(&result)
-
-	if len(result.Items) != 1 {
-		t.Errorf("Number of service accounts: expected: %d, returned: %d", 1, len(result.Items))
+	namespace := "ns1"
+	_, err := r.K8sClient.CoreV1().Namespaces().Create(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}})
+	if err != nil {
+		t.Fatalf("Error creating namespace '%s': %v\n", namespace, err)
 	}
-	if result.Items[0].Name != serviceAccount {
-		t.Errorf("%s is not returned: %s, %s", serviceAccount, result.Items[0].Name, result.Items[1].Name)
+
+	serviceAccounts := []corev1.ServiceAccount{
+		corev1.ServiceAccount{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "test-sa",
+			},
+		},
 	}
+	for _, serviceAccount := range serviceAccounts {
+		_, err := r.K8sClient.CoreV1().ServiceAccounts(namespace).Create(&serviceAccount)
+		if err != nil {
+			t.Fatalf("Error creating serviceAccount '%s': %v\n", serviceAccount.Name, err)
+		}
+	}
+
+	httpReq := dummyHTTPRequest("GET", fmt.Sprintf("%s/v1/namespaces/%s/serviceaccounts", server.URL, namespace), nil)
+	response, _ := http.DefaultClient.Do(httpReq)
+	responseServiceAccountList := corev1.ServiceAccountList{}
+	if err := json.NewDecoder(response.Body).Decode(&responseServiceAccountList); err != nil {
+		t.Fatalf("Error decoding getAllServiceAccounts response: %v\n", err)
+	} else {
+		if len(responseServiceAccountList.Items) != len(serviceAccounts) {
+			t.Errorf("All expected serviceAccounts were not returned: expected %v, actual %v", len(serviceAccounts), len(responseServiceAccountList.Items))
+		}
+	}
+
 }

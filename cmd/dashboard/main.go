@@ -14,36 +14,54 @@ limitations under the License.
 package main
 
 import (
-	"net/http"
-	"os"
-
 	restful "github.com/emicklei/go-restful"
-	endpoints "github.com/tektoncd/dashboard/pkg/endpoints"
+	kubecontroller "github.com/tektoncd/dashboard/pkg/controllers/kubernetes"
+	tektoncontroller "github.com/tektoncd/dashboard/pkg/controllers/tekton"
+	"github.com/tektoncd/dashboard/pkg/endpoints"
 	logging "github.com/tektoncd/dashboard/pkg/logging"
 	clientset "github.com/tektoncd/pipeline/pkg/client/clientset/versioned"
+	tektoninformers "github.com/tektoncd/pipeline/pkg/client/informers/externalversions"
+	k8sinformers "k8s.io/client-go/informers"
 	k8sclientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/sample-controller/pkg/signals"
+	"net/http"
+	"os"
+	"time"
 )
 
+// Stores config env
+type config struct {
+	kubeConfigPath string
+	// Should conform with http.Server.Addr field
+	port             string
+	installNamespace string
+}
+
 func main() {
-	var cfg *rest.Config
-	var err error
-	kubeconfig := os.Getenv("KUBECONFIG")
-	if len(kubeconfig) != 0 {
-		cfg, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
-	} else {
-		cfg, err = rest.InClusterConfig()
-	}
-	if err != nil {
-		logging.Log.Errorf("error building kubeconfig from %s: %s", kubeconfig, err.Error())
+	dashboardConfig := config{
+		kubeConfigPath:   os.Getenv("KUBECONFIG"),
+		port:             ":8080",
+		installNamespace: os.Getenv("INSTALLED_NAMESPACE"),
 	}
 
-	port := ":8080"
+	var cfg *rest.Config
+	var err error
+	if len(dashboardConfig.kubeConfigPath) != 0 {
+		cfg, err = clientcmd.BuildConfigFromFlags("", dashboardConfig.kubeConfigPath)
+		if err != nil {
+			logging.Log.Errorf("Error building kubeconfig from %s: %s", dashboardConfig.kubeConfigPath, err.Error())
+		}
+	} else {
+		if cfg, err = rest.InClusterConfig(); err != nil {
+			logging.Log.Errorf("Error building kubeconfig: %s", err.Error())
+		}
+	}
+
 	portNumber := os.Getenv("PORT")
 	if portNumber != "" {
-		port = ":" + portNumber
+		dashboardConfig.port = ":" + portNumber
 		logging.Log.Infof("Port number from config: %s", portNumber)
 	}
 
@@ -52,16 +70,12 @@ func main() {
 
 	pipelineClient, err := clientset.NewForConfig(cfg)
 	if err != nil {
-		logging.Log.Errorf("error building pipeline clientset: %s", err.Error())
-	} else {
-		logging.Log.Info("Got a pipeline client")
+		logging.Log.Errorf("Error building pipeline clientset: %s", err.Error())
 	}
 
 	k8sClient, err := k8sclientset.NewForConfig(cfg)
 	if err != nil {
-		logging.Log.Errorf("error building k8s clientset: %s", err.Error())
-	} else {
-		logging.Log.Info("Got a k8s client")
+		logging.Log.Errorf("Error building k8s clientset: %s", err.Error())
 	}
 
 	resource := endpoints.Resource{
@@ -69,22 +83,32 @@ func main() {
 		K8sClient:      k8sClient,
 	}
 
+	// Any functional changes to the the router mux should be reflected in endpoints/test-utils.test_go/func dummyServer()
 	logging.Log.Info("Registering REST endpoints")
 	resource.RegisterWeb(wsContainer)
 	resource.RegisterEndpoints(wsContainer)
 	resource.RegisterWebsocket(wsContainer)
-	resource.RegisterHealthProbes(wsContainer)
-	resource.RegisterReadinessProbes(wsContainer)
+	resource.RegisterHealthProbe(wsContainer)
+	resource.RegisterReadinessProbe(wsContainer)
+	endpoints.RegisterExtensions(wsContainer)
 
-	installedNamespace := os.Getenv("INSTALLED_NAMESPACE")
-	logging.Log.Infof("Searching for extensions in the namespace %s", installedNamespace)
-	resource.RegisterExtensions(wsContainer, installedNamespace)
-
+	logging.Log.Info("Creating controllers")
 	stopCh := signals.SetupSignalHandler()
-	resource.StartResourcesController(stopCh)
-	resource.StartNamespacesController(stopCh)
+	resyncDur := time.Second * 30
+	tektonInformerFactory := tektoninformers.NewSharedInformerFactory(resource.PipelineClient, resyncDur)
+	kubeInformerFactory := k8sinformers.NewSharedInformerFactory(resource.K8sClient, resyncDur)
+	// Add all tekton controllers
+	tektoncontroller.NewTaskRunController(tektonInformerFactory, stopCh)
+	tektoncontroller.NewPipelineRunController(tektonInformerFactory, stopCh)
+	// Add all kube controllers
+	kubecontroller.NewExtensionController(kubeInformerFactory, stopCh, wsContainer)
+	kubecontroller.NewNamespaceController(kubeInformerFactory, stopCh)
+	// Started once all controllers have been registered
+	logging.Log.Info("Starting controllers")
+	tektonInformerFactory.Start(stopCh)
+	kubeInformerFactory.Start(stopCh)
 
 	logging.Log.Infof("Creating server and entering wait loop")
-	server := &http.Server{Addr: port, Handler: wsContainer}
+	server := &http.Server{Addr: dashboardConfig.port, Handler: wsContainer}
 	logging.Log.Fatal(server.ListenAndServe())
 }

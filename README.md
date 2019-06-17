@@ -35,8 +35,8 @@ The `install-dev.sh` script will build and push an image of the Tekton Dashboard
 
 1. Install [tektoncd-pipeline-operator](https://github.com/openshift/tektoncd-pipeline-operator#deploy-openshift-pipelines-operator-on-minikube-for-testing)
 2. [Checkout](https://github.com/tektoncd/dashboard/blob/master/DEVELOPMENT.md#checkout-your-fork) the repository
-3. Install deployment config `$oc process -f config/templates/deploy.yaml | oc apply -f-`
-4. Install build config `$oc process -f config/templates/build.yaml | oc apply -f-`
+3. Install deployment config `oc process -f config/templates/deploy.yaml | oc apply -f -`
+4. Install build config `oc process -f config/templates/build.yaml | oc apply -f -`
 
 ## Accessing the Dashboard
 The Dashboard has can be accessed through its ClusterIP Service by running `kubectl proxy`. Assuming default is the install namespace for the dashboard, you can access the web UI at `localhost:8001/api/v1/namespaces/default/services/tekton-dashboard:http/proxy/`

@@ -21,28 +21,37 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	restful "github.com/emicklei/go-restful"
 	logging "github.com/tektoncd/dashboard/pkg/logging"
 	"github.com/tektoncd/dashboard/pkg/utils"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// extensionLabel - service with this extensionLabel is registered as extension
-const extensionLabel = "tekton-dashboard-extension=true"
+// Label key required by services to be registered as a dashboard extension
+const ExtensionLabelKey = "tekton-dashboard-extension"
 
-// urlKey - extension path is specified by the annotation with the urlKey
-const urlKey = "tekton-dashboard-endpoints"
+// Label value required by services to be registered as a dashboard extension
+const ExtensionLabelValue = "true"
 
-// bundleLocatonKey - extension UI bundle location annotation
-const bundleLocationKey = "tekton-dashboard-bundle-location"
+// Full label required by services to be registered as a dashboard extension
+const ExtensionLabel = ExtensionLabelKey + "=" + ExtensionLabelValue
 
-// displayNameKey - extension display name annotation
-const displayNameKey = "tekton-dashboard-display-name"
+// Annotation that specifies the valid extension path, defaults to "/"
+const ExtensionUrlKey = "tekton-dashboard-endpoints"
+
+// Delimiter to be used between the extension endpoints annotation value
+const ExtensionEndpointDelimiter = "."
+
+// Extension UI bundle location annotation
+const ExtensionBundleLocationKey = "tekton-dashboard-bundle-location"
+
+// Extension display name annotation
+const ExtensionDisplayNameKey = "tekton-dashboard-display-name"
 
 // extensionRoot
-const extensionRoot = "/extensions"
+const ExtensionRoot = "/v1/extensions"
 
 var webResourcesDir = os.Getenv("WEB_RESOURCES_DIR")
 
@@ -51,6 +60,13 @@ func (r Resource) RegisterWeb(container *restful.Container) {
 
 	container.Handle("/", http.FileServer(http.Dir(webResourcesDir)))
 }
+
+// Router rules
+// Does not apply to websocket/extensions/probes
+// GET:    200
+// POST:   201
+// PUT:    204
+// Delete: 204
 
 // Register APIs to interface with core Tekton/K8s pieces
 func (r Resource) RegisterEndpoints(container *restful.Container) {
@@ -111,7 +127,7 @@ func (r Resource) RegisterWebsocket(container *restful.Container) {
 }
 
 // RegisterHealthProbes - this registers the /health endpoint
-func (r Resource) RegisterHealthProbes(container *restful.Container) {
+func (r Resource) RegisterHealthProbe(container *restful.Container) {
 	logging.Log.Info("Adding API for health")
 	wsv3 := new(restful.WebService)
 	wsv3.
@@ -123,7 +139,7 @@ func (r Resource) RegisterHealthProbes(container *restful.Container) {
 }
 
 // RegisterReadinessProbes - this registers the /readiness endpoint
-func (r Resource) RegisterReadinessProbes(container *restful.Container) {
+func (r Resource) RegisterReadinessProbe(container *restful.Container) {
 	logging.Log.Info("Adding API for readiness")
 	wsv4 := new(restful.WebService)
 	wsv4.
@@ -145,82 +161,118 @@ type Extension struct {
 	BundleLocation string `json:"bundlelocation"`
 }
 
-var extensions []Extension
+// Informer only receives services and must be able to map to WebService/Extension for unregister
+var ExtensionMutex *sync.RWMutex = new(sync.RWMutex)
+var serviceMap map[*corev1.Service]*restful.WebService = make(map[*corev1.Service]*restful.WebService)
+var ExtensionMap map[*corev1.Service]Extension = make(map[*corev1.Service]Extension)
 
-// RegisterExtensions - this discovers the extensions and registers them as the REST API extension
-func (r Resource) RegisterExtensions(container *restful.Container, namespace string) {
-	logging.Log.Info("Adding API for extensions")
-	svcs, err := r.K8sClient.CoreV1().Services(namespace).List(metav1.ListOptions{LabelSelector: extensionLabel})
-	if err != nil {
-		logging.Log.Errorf("error occurred whilst looking for extensions: %s", err)
-		return
-	}
+// Registers the endpoint to get all CURRENTLY registered extensions
+func RegisterExtensions(container *restful.Container) {
 	ws := new(restful.WebService)
 	ws.
-		Path("/v1").
+		Path(ExtensionRoot).
 		Consumes(restful.MIME_JSON).
 		Produces(restful.MIME_JSON)
-
-	ws.Route(ws.GET(extensionRoot).To(r.getAllExtensions))
-	// Add routes for all extension services
-	for _, svc := range svcs.Items {
-		base := extensionRoot + "/" + svc.ObjectMeta.Name
-		logging.Log.Debugf("Extension URL: %s", base)
-		url, ok := svc.ObjectMeta.Annotations[urlKey]
-		ext := Extension{Name: svc.ObjectMeta.Name, URL: url, Port: getPort(svc),
-			DisplayName:    svc.ObjectMeta.Annotations[displayNameKey],
-			BundleLocation: svc.ObjectMeta.Annotations[bundleLocationKey]}
-		// Base extension path
-		paths := []string{""}
-		if ok {
-			if len(url) != 0 {
-				paths = strings.Split(url, ".")
-			}
-		}
-		for _, path := range paths {
-			// extension handler is registered at the url
-			routingPath := strings.TrimSuffix(base+"/"+path, "/")
-			logging.Log.Debugf("Registering path: %s", routingPath)
-			ws.Route(ws.GET(routingPath).To(ext.HandleExtension))
-			ws.Route(ws.POST(routingPath).To(ext.HandleExtension))
-			ws.Route(ws.PUT(routingPath).To(ext.HandleExtension))
-			ws.Route(ws.DELETE(routingPath).To(ext.HandleExtension))
-			ws.Route(ws.GET(routingPath + "/{var:*}").To(ext.HandleExtension))
-			ws.Route(ws.POST(routingPath + "/{var:*}").To(ext.HandleExtension))
-			ws.Route(ws.PUT(routingPath + "/{var:*}").To(ext.HandleExtension))
-			ws.Route(ws.DELETE(routingPath + "/{var:*}").To(ext.HandleExtension))
-		}
-		extensions = append(extensions, ext)
-	}
-	logging.Log.Debugf("Extensions: %+v", extensions)
+	ws.Route(ws.GET("").To(getAllExtensions))
 	container.Add(ws)
 }
 
+/* Get all extensions in the installed namespace */
+func getAllExtensions(request *restful.Request, response *restful.Response) {
+	logging.Log.Debugf("In getAllExtensions")
+
+	response.AddHeader("Content-Type", "application/json")
+	extensions := []Extension{}
+	ExtensionMutex.RLock()
+	defer ExtensionMutex.RUnlock()
+	for _, e := range ExtensionMap {
+		extensions = append(extensions, e)
+	}
+	logging.Log.Debugf("Extension: %+v", extensions)
+	response.WriteEntity(extensions)
+}
+
+// Add a discovered extension as a webservice (that must have a unique rootPath) to the container/mux
+func RegisterExtension(container *restful.Container, extensionService *corev1.Service) {
+	logging.Log.Infof("Adding extension %s", extensionService.Name)
+
+	ws := new(restful.WebService)
+	ws.
+		Path(ExtensionRoot + "/" + extensionService.ObjectMeta.Name).
+		Consumes(restful.MIME_JSON).
+		Produces(restful.MIME_JSON)
+	url, ok := extensionService.ObjectMeta.Annotations[ExtensionUrlKey]
+	ext := Extension{
+		Name:           extensionService.ObjectMeta.Name,
+		URL:            extensionService.Spec.ClusterIP,
+		Port:           getServicePort(*extensionService),
+		DisplayName:    extensionService.ObjectMeta.Annotations[ExtensionDisplayNameKey],
+		BundleLocation: extensionService.ObjectMeta.Annotations[ExtensionBundleLocationKey],
+	}
+	// Service does not have a ClusterIP
+	if ext.URL == "" {
+		logging.Log.Errorf("Extension service %s does not have ClusterIP. Cannot add route", extensionService.Name)
+		return
+	}
+
+	// Base extension path
+	paths := []string{""}
+	if ok {
+		if len(url) != 0 {
+			paths = strings.Split(url, ExtensionEndpointDelimiter)
+		}
+	}
+	ExtensionMutex.Lock()
+	defer ExtensionMutex.Unlock()
+	// Add routes for extension service
+	for _, path := range paths {
+		debugFullPath := strings.TrimSuffix(ws.RootPath()+"/"+path, "/")
+		logging.Log.Debugf("Registering path: %s", debugFullPath)
+		ws.Route(ws.GET(path).To(ext.handleExtension))
+		ws.Route(ws.POST(path).To(ext.handleExtension))
+		ws.Route(ws.PUT(path).To(ext.handleExtension))
+		ws.Route(ws.DELETE(path).To(ext.handleExtension))
+		// Route to all subroutes
+		ws.Route(ws.GET(path + "/{var:*}").To(ext.handleExtension))
+		ws.Route(ws.POST(path + "/{var:*}").To(ext.handleExtension))
+		ws.Route(ws.PUT(path + "/{var:*}").To(ext.handleExtension))
+		ws.Route(ws.DELETE(path + "/{var:*}").To(ext.handleExtension))
+	}
+	ExtensionMap[extensionService] = ext
+	serviceMap[extensionService] = ws
+	container.Add(ws)
+}
+
+// Should be called PRIOR to registration of extensionService on informer update
+func UnregisterExtension(container *restful.Container, extensionService *corev1.Service) {
+	logging.Log.Infof("Removing extension %s", extensionService.Name)
+	ExtensionMutex.Lock()
+	defer ExtensionMutex.Unlock()
+	extensionWebService := serviceMap[extensionService]
+	container.Remove(extensionWebService)
+	delete(ExtensionMap, extensionService)
+	delete(serviceMap, extensionService)
+}
+
 // HandleExtension - this routes request to the extension service
-func (ext Extension) HandleExtension(request *restful.Request, response *restful.Response) {
-	target, err := url.Parse("http://" + ext.Name + ":" + ext.Port + "/")
+func (ext Extension) handleExtension(request *restful.Request, response *restful.Response) {
+	target, err := url.Parse("http://" + ext.URL + ":" + ext.Port + "/")
 	if err != nil {
 		utils.RespondError(response, err, http.StatusInternalServerError)
 		return
 	}
 	logging.Log.Debugf("Path in URL: %+v", request.Request.URL.Path)
-	request.Request.URL.Path = strings.TrimPrefix(request.Request.URL.Path, fmt.Sprintf("/v1%s/%s", extensionRoot, ext.Name))
+	request.Request.URL.Path = strings.TrimPrefix(request.Request.URL.Path, fmt.Sprintf("%s/%s", ExtensionRoot, ext.Name))
 	logging.Log.Debugf("Path in rerouting URL: %+v", request.Request.URL.Path)
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.ServeHTTP(response, request.Request)
 }
 
-/* Get all extensions in the installed namespace */
-func (r Resource) getAllExtensions(request *restful.Request, response *restful.Response) {
-	logging.Log.Debugf("In getAllExtensions")
-	logging.Log.Debugf("Extension: %+v", extensions)
-
-	response.AddHeader("Content-Type", "application/json")
-	response.WriteEntity(extensions)
-}
-
-// getPort - this gets the port of the service
-func getPort(svc corev1.Service) string {
+// Returns target port if exists, else source == target
+func getServicePort(svc corev1.Service) string {
+	if svc.Spec.Ports[0].TargetPort.StrVal != "" {
+		return svc.Spec.Ports[0].TargetPort.String()
+	}
 	return strconv.Itoa(int(svc.Spec.Ports[0].Port))
 }
 
