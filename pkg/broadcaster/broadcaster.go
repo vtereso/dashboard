@@ -16,6 +16,7 @@ package broadcaster
 import (
 	"errors"
 	"sync"
+	"fmt"
 )
 
 type messageType string
@@ -42,9 +43,20 @@ const (
 	TaskRunUpdated          messageType = "TaskRunUpdated"
 )
 
+type workQueue struct {
+	sync.Mutex
+	head *socketDataNode
+	tail *socketDataNode
+}
+
 type SocketData struct {
 	MessageType messageType
 	Payload     interface{}
+}
+
+type socketDataNode struct {
+	SocketData
+	next *socketDataNode
 }
 
 // Only a pointer to the struct should be used
@@ -56,24 +68,23 @@ type Broadcaster struct {
 	c           chan SocketData
 }
 
-// Wrapper return type for subscriptions
+// Only a pointer to the struct should be used
 type Subscriber struct {
-	subChan   chan SocketData
-	unsubChan chan struct{}
-}
-
-// Read-Only access to the subscription channel
-// Open or nil, never closed
-func (s *Subscriber) SubChan() <-chan SocketData {
-	return s.subChan
-}
-
-// Closed on unsubscribe or when broadcast parent channel closes
-func (s *Subscriber) UnsubChan() <-chan struct{} {
-	return s.unsubChan
+	workQueue workQueue
+	// Handles each item enqueued
+	// true = work, false = unsubscribe
+	process func(s SocketData) bool
+	// Signal subscriber to read when populating empty queue
+	// true = work, false = expired
+	work chan bool
 }
 
 var expiredError error = errors.New("Broadcaster expired")
+var locker sync.Mutex
+var totalCount int
+
+var broadcasterCount int
+
 
 // Creates broadcaster from channel parameter and immediately starts broadcasting
 // Without any subscribers, received data will be discarded
@@ -87,22 +98,33 @@ func NewBroadcaster(c chan SocketData) *Broadcaster {
 	b.c = c
 	go func() {
 		for {
-			msg, channelOpen := <-b.c
+			msg, channelOpen := <- b.c
 			if channelOpen {
 				b.subscribers.Range(func(key, value interface{}) bool {
 					subscriber := key.(*Subscriber)
-					select {
-					case subscriber.subChan <- msg:
-					case <-subscriber.unsubChan:
+					subscriber.workQueue.Lock()
+					newQueueNode := &socketDataNode{
+						SocketData: msg,
 					}
+					if subscriber.workQueue.head == nil {
+						subscriber.workQueue.head, subscriber.workQueue.tail = newQueueNode, newQueueNode
+						// Signal the subscriber to work
+						subscriber.work <- true
+					} else {
+						subscriber.workQueue.tail.next = newQueueNode
+					}
+					subscriber.workQueue.Unlock()
+					broadcasterCount++
+					fmt.Println("Broadcaster",broadcasterCount)
 					return true
 				})
 			} else {
 				b.expiredLock.Lock()
 				b.expired = true
+				// Kill all subscribers
 				b.subscribers.Range(func(key, value interface{}) bool {
 					subscriber := key.(*Subscriber)
-					close(subscriber.unsubChan)
+					close(subscriber.work)
 					return true
 				})
 				// Remove references
@@ -121,20 +143,61 @@ func (b *Broadcaster) Expired() bool {
 	return b.expired
 }
 
-// Subscriber expected to constantly consume or unsubscribe
-func (b *Broadcaster) Subscribe() (*Subscriber, error) {
+// Passed function will be invoked for each item in Subscriber work queue
+// The work queue is populated by data ingested by the broadcaster channel
+// Subscriber return can be used to unsubscribe
+func (b *Broadcaster) Subscribe(processFunc func(s SocketData)bool) (*Subscriber, error) {
 	b.expiredLock.Lock()
 	defer b.expiredLock.Unlock()
 
 	if b.expired {
 		return &Subscriber{}, expiredError
 	}
+	if processFunc == nil {
+		return &Subscriber{}, errors.New("Nil function not allowed")
+	}
 	newSub := &Subscriber{
-		subChan:   make(chan SocketData),
-		unsubChan: make(chan struct{}),
+		process: processFunc,
+		work: make(chan bool, 1),
 	}
 	// Generate unique key
 	b.subscribers.Store(newSub, struct{}{})
+	go func() {
+		for {
+			// Wait until signal is received to work
+			fmt.Println("Waiting for work")
+			work := <- newSub.work
+			if !work {
+				return
+			}
+			// Process the workQueue until empty
+			var endOfQueue bool
+			for {
+				// Obtain work
+				var workItem SocketData
+				newSub.workQueue.Lock()
+				workItem = newSub.workQueue.head.SocketData
+				newSub.workQueue.head = newSub.workQueue.head.next // Reset head
+				if newSub.workQueue.head == nil {
+					endOfQueue = true
+				}
+				newSub.workQueue.Unlock()
+				// Process
+				locker.Lock()
+				totalCount++
+				fmt.Println(totalCount)
+				locker.Unlock()
+				success := newSub.process(workItem)
+				if !success {
+					b.Unsubscribe(newSub)
+					return
+				}
+				if endOfQueue {
+					return
+				}
+			}
+		}
+	}()
 	return newSub, nil
 }
 
@@ -147,7 +210,8 @@ func (b *Broadcaster) Unsubscribe(sub *Subscriber) error {
 	}
 	if _, ok := b.subscribers.Load(sub); ok {
 		b.subscribers.Delete(sub)
-		close(sub.unsubChan)
+		// Signal end of work
+		sub.work <- false
 		return nil
 	}
 	return errors.New("Subscription not found")

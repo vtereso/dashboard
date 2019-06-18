@@ -1,23 +1,28 @@
 package broadcaster
 
 import (
+	"fmt"
+	"sync/atomic"
 	"sync"
+	"time"
 	"testing"
 )
+
+var lockerr sync.Mutex
+var totalMessages int
 
 // Add and remove Subscribers
 // PoolSize() should reflect proper size
 func TestNormalSubUnsub(t *testing.T) {
 	c := make(chan SocketData)
 	broadcaster := NewBroadcaster(c)
-	subs, _ := createSubscribers(t, broadcaster, 1)
+	subs, _, _ := createSubscribers(t, broadcaster, 1)
 	expectPoolSize(t, broadcaster, 1)
 	broadcaster.Unsubscribe(subs[0])
 	if err := broadcaster.Unsubscribe(subs[0]); err == nil {
 		t.Error("Unsubscribing same subscriber twice did not return error")
 	}
 	expectPoolSize(t, broadcaster, 0)
-	expectUnsubscribed(t, subs[0])
 }
 
 // Ensure Broadcaster expires and blocks sub/unsub
@@ -25,7 +30,8 @@ func TestExpiredSubUnsub(t *testing.T) {
 	c := make(chan SocketData)
 	broadcaster := NewBroadcaster(c)
 	closeAwaitExpired(c, broadcaster)
-	sub, err := broadcaster.Subscribe()
+	processFunc := func(s SocketData) bool{return true}
+	sub, err := broadcaster.Subscribe(processFunc)
 	if err == nil {
 		t.Error("Expired broadcaster did NOT error on creating new subscription")
 	}
@@ -38,10 +44,9 @@ func TestExpiredSubUnsub(t *testing.T) {
 func TestBroadcasterClose(t *testing.T) {
 	c := make(chan SocketData)
 	broadcaster := NewBroadcaster(c)
-	subs, _ := createSubscribers(t, broadcaster, 1)
+	createSubscribers(t, broadcaster, 1)
 	closeAwaitExpired(c, broadcaster)
 	expectPoolSize(t, broadcaster, 0)
-	expectUnsubscribed(t, subs[0])
 }
 
 // Ensure all subscribers receive all messages sent out
@@ -50,83 +55,88 @@ func TestSimpleDataSend(t *testing.T) {
 	c := make(chan SocketData)
 	broadcaster := NewBroadcaster(c)
 	const numberOfSubs int32 = 100
-	subs, _ := createSubscribers(t, broadcaster, numberOfSubs)
-	subscriberMessages := make([]int32, numberOfSubs)
-	var wg sync.WaitGroup
-	for i := range subs {
-		index := i
-		go func() {
-			wg.Add(1)
-			subscriberMessages[index] = subscriberRead(t, subs[index])
-			wg.Done()
-		}()
-	}
+	_, getMessageFuncs, _ := createSubscribers(t, broadcaster, numberOfSubs)
 	const numberOfMessages int32 = 10
 	sendData(c, numberOfMessages)
-	close(c)
-	wg.Wait()
-	expectSubscribersSynced(t, numberOfMessages, subscriberMessages)
+	time.Sleep(time.Second)
+	fmt.Println("POOL SIZE:",broadcaster.PoolSize())
+	for i := range getMessageFuncs {
+		expectSubscriberSynced(t, numberOfMessages, getMessageFuncs[i], i)
+	}
+	expectPoolSize(t, broadcaster, numberOfSubs)
 }
 
 // Ensure no blocking when subscriber unsubs during message broadcast
-func TestUnsubDataSend(t *testing.T) {
-	c := make(chan SocketData)
-	broadcaster := NewBroadcaster(c)
-	// First will listen
-	// Second will unsubscribe
-	const numberOfSubs int32 = 2
-	subs, _ := createSubscribers(t, broadcaster, numberOfSubs)
-	subscriberMessages := make([]int32, 1)
-	var wg sync.WaitGroup
-	// Forced block on broadcaster since not all subscribers are listening
-	go func() {
-		wg.Add(1)
-		subscriberMessages[0] = subscriberRead(t, subs[0])
-		wg.Done()
-	}()
-	sendData(c, 1)
-	// Data has already been received by broadcaster, unlock fan-out
-	broadcaster.Unsubscribe(subs[1])
-	sendData(c, 1)
-	close(c)
-	wg.Wait()
-	expectSubscribersSynced(t, 2, subscriberMessages)
-}
+// func TestUnsubDataSend(t *testing.T) {
+// 	c := make(chan SocketData)
+// 	broadcaster := NewBroadcaster(c)
+// 	// First will listen
+// 	// Second will unsubscribe
+// 	const numberOfSubs int32 = 2
+// 	subs, getMessageFuncs, _ := createSubscribers(t, broadcaster, numberOfSubs)
+// 	sendData(c, 1)
+// 	// Data has already been received by broadcaster
+// 	broadcaster.Unsubscribe(subs[1])
+// 	sendData(c, 1)
+// 	time.Sleep(time.Second)
+// 	fmt.Println("POOL SIZE:",broadcaster.PoolSize())
+// 	// Ensure remaining subscriber received all messages
+// 	expectSubscriberSynced(t, 2, getMessageFuncs[0], 0)
+// 	expectPoolSize(t, broadcaster, 1)
+// }
 
 // Testing utility functions below
 
-func expectSubscribersSynced(t *testing.T, expectedMessages int32, messages []int32) {
-	for i := range messages {
-		if messages[i] != expectedMessages {
-			t.Errorf("Expected messages: %d, Subscriber[%d] Received: %d\n", expectedMessages, i, messages[i])
+func expectSubscriberSynced(t *testing.T, expectedMessages int32, messagesReceived func()int32, identifier int) {
+	t.Helper()
+	fatalTimeout := time.Now().Add(time.Second)
+	for {
+		actualMessages := messagesReceived()
+		if actualMessages == expectedMessages {
+			return
+		}
+		if time.Now().After(fatalTimeout) {
+			t.Errorf("All messages were not returned: expected %d, actual %d\n", expectedMessages, actualMessages)
+			t.Fatalf("Timeout waiting for subscriber %d to be synced\n",identifier)
 		}
 	}
 }
 
-// Responds with the number of messages read
-func subscriberRead(t *testing.T, s *Subscriber) int32 {
-	var messagesReceived int32
-	for {
-		select {
-		case <-s.SubChan():
-			messagesReceived++
-		case <-s.UnsubChan():
-			return messagesReceived
-		}
+// Returns functions that have closure on shared counter
+func subscriberRwFuncs() (func() int32, func()) {
+	var messages int32
+	getMessages := func() int32 {
+		return atomic.LoadInt32(&messages)
 	}
+	incrementMessages := func() {
+		atomic.AddInt32(&messages, 1)
+	}
+	return getMessages, incrementMessages
 }
 
 // Return subscriber slice with requested number of subscribers
-func createSubscribers(t *testing.T, b *Broadcaster, reqSubs int32) ([]*Subscriber, error) {
+func createSubscribers(t *testing.T, b *Broadcaster, reqSubs int32) ([]*Subscriber, []func()int32, error) {
 	subscriberList := []*Subscriber{}
+	getMessagesList := []func()int32{}
 	for i := 0; int32(i) < reqSubs; i++ {
-		sub, err := b.Subscribe()
+		reader, writer := subscriberRwFuncs()
+		// Increment counter for each message received
+		processFunc := func(s SocketData) bool {
+			writer()
+			lockerr.Lock()
+			totalMessages++
+			fmt.Println("subscriber messages",totalMessages)
+			lockerr.Unlock()
+			return true
+		}
+		sub, err := b.Subscribe(processFunc)
 		if err != nil {
-			return []*Subscriber{}, err
+			return []*Subscriber{}, nil, err
 		}
 		subscriberList = append(subscriberList, sub)
+		getMessagesList = append(getMessagesList, reader)
 	}
-	return subscriberList, nil
+	return subscriberList, getMessagesList, nil
 }
 
 // Sends data to broadcaster channel
@@ -145,17 +155,6 @@ func closeAwaitExpired(c chan SocketData, b *Broadcaster) {
 		if b.Expired() {
 			break
 		}
-	}
-}
-
-// Expected unsubcribe behavior:
-// SubChan set to nil
-// UnsubChan closed
-func expectUnsubscribed(t *testing.T, s *Subscriber) {
-	select {
-	case <-s.UnsubChan():
-	default:
-		t.Error("Subscriber has not been unsubscribed")
 	}
 }
 

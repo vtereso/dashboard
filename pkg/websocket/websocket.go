@@ -39,10 +39,15 @@ func UpgradeToWebsocket(request *restful.Request, response *restful.Response) (*
 
 // WriteOnlyWebsocket discards text messages from the peer connection
 func WriteOnlyWebsocket(connection *websocket.Conn, b *broadcaster.Broadcaster) {
-	// The underlying connection is never closed so this cannot error
-	subscriber, _ := b.Subscribe()
+	processFunc := func(socketData broadcaster.SocketData) bool {
+		successfulSend := websocketSend(connection, socketData) 
+		if !successfulSend {
+			return false
+		}
+		return true
+	}
+	subscriber, _ := b.Subscribe(processFunc)
 	go readControl(connection, b, subscriber)
-	write(connection, subscriber)
 }
 
 // ping over the socket with a given deadline; if there's an error, close
@@ -83,22 +88,6 @@ func readControl(connection *websocket.Conn, b *broadcaster.Broadcaster, s *broa
 func ReportClosing(connection *websocket.Conn) {
 	connection.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 	connection.Close()
-}
-
-// Send data over the connection using the subscriber channel, if there's a failure we return
-func write(connection *websocket.Conn, subscriber *broadcaster.Subscriber) {
-	subChan := subscriber.SubChan()
-	unsubChan := subscriber.UnsubChan()
-	for {
-		select {
-		case socketData := <-subChan:
-			if !websocketSend(connection, socketData) {
-				return
-			}
-		case <-unsubChan:
-			return
-		}
-	}
 }
 
 // Returns whether successful or not, closes connection on failures
