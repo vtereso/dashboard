@@ -16,7 +16,6 @@ package broadcaster
 import (
 	"errors"
 	"sync"
-	"fmt"
 )
 
 type messageType string
@@ -80,11 +79,8 @@ type Subscriber struct {
 }
 
 var expiredError error = errors.New("Broadcaster expired")
-var locker sync.Mutex
-var totalCount int
 
-var broadcasterCount int
-
+var processed int
 
 // Creates broadcaster from channel parameter and immediately starts broadcasting
 // Without any subscribers, received data will be discarded
@@ -112,10 +108,9 @@ func NewBroadcaster(c chan SocketData) *Broadcaster {
 						subscriber.work <- true
 					} else {
 						subscriber.workQueue.tail.next = newQueueNode
+						subscriber.workQueue.tail = newQueueNode
 					}
 					subscriber.workQueue.Unlock()
-					broadcasterCount++
-					fmt.Println("Broadcaster",broadcasterCount)
 					return true
 				})
 			} else {
@@ -165,7 +160,6 @@ func (b *Broadcaster) Subscribe(processFunc func(s SocketData)bool) (*Subscriber
 	go func() {
 		for {
 			// Wait until signal is received to work
-			fmt.Println("Waiting for work")
 			work := <- newSub.work
 			if !work {
 				return
@@ -183,17 +177,13 @@ func (b *Broadcaster) Subscribe(processFunc func(s SocketData)bool) (*Subscriber
 				}
 				newSub.workQueue.Unlock()
 				// Process
-				locker.Lock()
-				totalCount++
-				fmt.Println(totalCount)
-				locker.Unlock()
 				success := newSub.process(workItem)
 				if !success {
 					b.Unsubscribe(newSub)
 					return
 				}
 				if endOfQueue {
-					return
+					break
 				}
 			}
 		}

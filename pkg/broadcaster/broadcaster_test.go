@@ -1,18 +1,13 @@
 package broadcaster
 
 import (
-	"fmt"
 	"sync/atomic"
-	"sync"
 	"time"
 	"testing"
 )
 
-var lockerr sync.Mutex
-var totalMessages int
-
-// Add and remove Subscribers
-// PoolSize() should reflect proper size
+//Add and remove Subscribers
+//PoolSize() should reflect proper size
 func TestNormalSubUnsub(t *testing.T) {
 	c := make(chan SocketData)
 	broadcaster := NewBroadcaster(c)
@@ -54,12 +49,10 @@ func TestBroadcasterClose(t *testing.T) {
 func TestSimpleDataSend(t *testing.T) {
 	c := make(chan SocketData)
 	broadcaster := NewBroadcaster(c)
-	const numberOfSubs int32 = 100
+	const numberOfSubs int32 = 1
 	_, getMessageFuncs, _ := createSubscribers(t, broadcaster, numberOfSubs)
 	const numberOfMessages int32 = 10
 	sendData(c, numberOfMessages)
-	time.Sleep(time.Second)
-	fmt.Println("POOL SIZE:",broadcaster.PoolSize())
 	for i := range getMessageFuncs {
 		expectSubscriberSynced(t, numberOfMessages, getMessageFuncs[i], i)
 	}
@@ -67,23 +60,21 @@ func TestSimpleDataSend(t *testing.T) {
 }
 
 // Ensure no blocking when subscriber unsubs during message broadcast
-// func TestUnsubDataSend(t *testing.T) {
-// 	c := make(chan SocketData)
-// 	broadcaster := NewBroadcaster(c)
-// 	// First will listen
-// 	// Second will unsubscribe
-// 	const numberOfSubs int32 = 2
-// 	subs, getMessageFuncs, _ := createSubscribers(t, broadcaster, numberOfSubs)
-// 	sendData(c, 1)
-// 	// Data has already been received by broadcaster
-// 	broadcaster.Unsubscribe(subs[1])
-// 	sendData(c, 1)
-// 	time.Sleep(time.Second)
-// 	fmt.Println("POOL SIZE:",broadcaster.PoolSize())
-// 	// Ensure remaining subscriber received all messages
-// 	expectSubscriberSynced(t, 2, getMessageFuncs[0], 0)
-// 	expectPoolSize(t, broadcaster, 1)
-// }
+func TestUnsubDataSend(t *testing.T) {
+	c := make(chan SocketData)
+	broadcaster := NewBroadcaster(c)
+	// First will listen
+	// Second will unsubscribe
+	const numberOfSubs int32 = 2
+	subs, getMessageFuncs, _ := createSubscribers(t, broadcaster, numberOfSubs)
+	sendData(c, 1)
+	// Data has already been received by broadcaster
+	broadcaster.Unsubscribe(subs[1])
+	sendData(c, 1)
+	// Ensure remaining subscriber received all messages
+	expectSubscriberSynced(t, 2, getMessageFuncs[0], 0)
+	expectPoolSize(t, broadcaster, 1)
+}
 
 // Testing utility functions below
 
@@ -123,10 +114,6 @@ func createSubscribers(t *testing.T, b *Broadcaster, reqSubs int32) ([]*Subscrib
 		// Increment counter for each message received
 		processFunc := func(s SocketData) bool {
 			writer()
-			lockerr.Lock()
-			totalMessages++
-			fmt.Println("subscriber messages",totalMessages)
-			lockerr.Unlock()
 			return true
 		}
 		sub, err := b.Subscribe(processFunc)
