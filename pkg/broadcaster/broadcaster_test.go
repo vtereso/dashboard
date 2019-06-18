@@ -49,7 +49,7 @@ func TestBroadcasterClose(t *testing.T) {
 func TestSimpleDataSend(t *testing.T) {
 	c := make(chan SocketData)
 	broadcaster := NewBroadcaster(c)
-	const numberOfSubs int32 = 1
+	const numberOfSubs int32 = 100
 	_, getMessageFuncs, _ := createSubscribers(t, broadcaster, numberOfSubs)
 	const numberOfMessages int32 = 10
 	sendData(c, numberOfMessages)
